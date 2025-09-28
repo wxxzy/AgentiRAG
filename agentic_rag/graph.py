@@ -38,7 +38,8 @@ def build_graph():
         lambda state: state["route"],
         {
             "web_search": "rewrite_query",
-            "vectorstore": "rewrite_query",
+            "hierarchical_search": "rewrite_query",
+            "direct_chunk_search": "rewrite_query",
             "direct": "direct_response"
         }
     )
@@ -52,7 +53,8 @@ def build_graph():
         lambda state: state["route"],
         {
             "web_search": "web_search",
-            "vectorstore": "generate_response" # <--- 直接指向生成答案
+            "hierarchical_search": "generate_response", # 检索已在路由节点完成
+            "direct_chunk_search": "generate_response"  # 检索已在路由节点完成
         }
     )
 

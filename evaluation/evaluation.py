@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-@desc: RAG各环节评估脚本（已适配分层检索架构）
+@desc: RAG各环节评估脚本（已适配智能混合检索架构）
 """
 import sys
 import os
@@ -26,8 +26,6 @@ from agentic_rag.nodes import (
     rewrite_query_node,
     grade_relevance_node
 )
-# 导入新的分层检索器
-from agentic_rag.hierarchical_retriever import hierarchical_retriever
 # 导入项目中已配置好的llm和embedding function，用于传递给Ragas
 from agentic_rag.chains import llm, get_embedding_function
 
@@ -37,8 +35,7 @@ DATASET_PATH = os.path.join(os.path.dirname(__file__), "golden_dataset.csv")
 
 def evaluate_router():
     """
-    评估路由节点（route_query_node）的性能。
-    此函数无需修改，因为route_query_node内部已更新为分层检索，改动被良好地封装了。
+    评估路由节点（route_query_node）的决策性能。
     """
     print("--- 开始评估【路由】环节 ---")
     
@@ -51,13 +48,27 @@ def evaluate_router():
     predictions = []
     ground_truth = []
 
+    # 更新理想路由以匹配新的策略
+    # 例如，将旧的 'vectorstore' 映射到新的策略
+    def map_ideal_route(row):
+        if row['question'].startswith("解释") or row['question'].startswith("总结"):
+            return "hierarchical_search"
+        # 这是一个简化的示例，您应该根据问题内容更精细地标注
+        if "国家药品编码" in row['question']:
+             return "direct_chunk_search"
+        return row['ideal_route'] # 保留原有的 web_search, direct
+
+    df['ideal_route_new'] = df.apply(map_ideal_route, axis=1)
+
+
     for index, row in tqdm(df.iterrows(), total=df.shape[0], desc="测试路由节点"):
         question = row['question']
-        ideal_route = row['ideal_route']
+        ideal_route = row['ideal_route_new']
         
         initial_state = AgentState(query=question, documents=[], response="", route="", is_relevant=False, updated_query="", error=None)
         
         try:
+            # 只获取路由决策，不关心其返回的文档
             output_state = route_query_node(initial_state)
             predicted_route = output_state.get("route")
         except Exception as e:
@@ -90,9 +101,9 @@ def evaluate_router():
 
 def evaluate_generator_and_retriever():
     """
-    评估检索器和生成器（retriever & generate_response_node）的性能。
+    评估智能路由、检索、生成这条完整链路的端到端性能。
     """
-    print("\n--- 开始评估【检索和生成】环节 ---")
+    print("\n--- 开始评估【端到端检索与生成】环节 ---")
     
     try:
         df = pd.read_csv(DATASET_PATH)
@@ -100,9 +111,10 @@ def evaluate_generator_and_retriever():
         print(f"错误：评估数据集 '{DATASET_PATH}' 未找到ảng")
         return
 
-    rag_questions_df = df[df['ideal_route'] == 'vectorstore'].copy()
+    # 我们将评估所有需要从本地知识库检索的场景
+    rag_questions_df = df[df['ideal_route'].isin(['vectorstore', 'direct_chunk_search', 'hierarchical_search'])].copy()
     if rag_questions_df.empty:
-        print("数据集中没有找到 'ideal_route' 为 'vectorstore' 的问题，跳过生成评估ảng")
+        print("数据集中没有找到需要本地检索的问题，跳过生成评估ảng")
         return
 
     questions = []
@@ -110,35 +122,34 @@ def evaluate_generator_and_retriever():
     retrieved_contexts = []
     ideal_answers = []
 
-    for index, row in tqdm(rag_questions_df.iterrows(), total=rag_questions_df.shape[0], desc="测试生成节点"):
+    for index, row in tqdm(rag_questions_df.iterrows(), total=rag_questions_df.shape[0], desc="测试端到端生成"):
         question = row['question']
         
-        current_state = AgentState(query=question, documents=[], response="", route="vectorstore", is_relevant=False, updated_query="", error=None)
-
+        # --- 模拟真实的Graph执行流程 ---
+        # 1. 调用路由和检索节点
         try:
-            rewrite_output = rewrite_query_node(current_state)
-            current_state['updated_query'] = rewrite_output['updated_query']
+            state_after_route = route_query_node(AgentState(query=question, documents=[], response="", route="", is_relevant=False, updated_query="", error=None))
         except Exception as e:
-            print(f"重写节点执行出错: {e}")
-            current_state['updated_query'] = question
+            print(f"路由节点在评估中出错: {e}")
+            continue
 
-        # --- 修改点：调用新的分层检索器 ---
+        # 2. 调用重写节点
         try:
-            retrieved_docs = hierarchical_retriever(current_state['updated_query'])
-            contexts = [doc.page_content for doc in retrieved_docs]
-            current_state['documents'] = retrieved_docs
+            state_after_rewrite = rewrite_query_node(state_after_route)
         except Exception as e:
-            print(f"分层检索器执行出错: {e}")
-            contexts = []
-            current_state['documents'] = []
+            print(f"重写节点在评估中出错: {e}")
+            state_after_rewrite = state_after_route # 出错则跳过
 
+        # 3. 调用生成节点
         try:
-            generate_output = generate_response_node(current_state)
-            answer = generate_output.get("response")
+            final_state = generate_response_node(state_after_rewrite)
+            answer = final_state.get("response", "")
         except Exception as e:
-            print(f"生成节点执行出错: {e}")
+            print(f"生成节点在评估中出错: {e}")
             answer = ""
 
+        # 收集Ragas所需的数据
+        contexts = [doc.page_content for doc in state_after_route.get("documents", [])]
         questions.append(question)
         generated_answers.append(answer)
         retrieved_contexts.append(contexts)
@@ -160,15 +171,10 @@ def evaluate_generator_and_retriever():
     try:
         result = evaluate(
             dataset=dataset,
-            metrics=[
-                faithfulness,       
-                answer_relevancy,   
-                context_recall,     
-            ],
+            metrics=[faithfulness, answer_relevancy, context_recall],
             llm=llm,
             embeddings=get_embedding_function(),
         )
-
         print(result)
         result_df = result.to_pandas()
         result_df.to_csv(os.path.join(os.path.dirname(__file__), "generator_ragas_report.csv"), index=False)
@@ -177,19 +183,10 @@ def evaluate_generator_and_retriever():
         print(f"Ragas评估执行出错: {e}")
 
 
-def evaluate_grader():
-    """
-    评估相关性评估节点（grade_relevance_node）的性能。
-    """
-    print("\n--- 【评估】环节评估（占位） ---")
-    print("评估'评估节点'需要一个专门的数据集ảng")
-
-
 def main():
     """主函数，按顺序执行所有评估。"""
     evaluate_router()
     evaluate_generator_and_retriever()
-    evaluate_grader()
 
 if __name__ == "__main__":
     main()

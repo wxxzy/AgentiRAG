@@ -54,7 +54,7 @@ def get_embedding_function():
 
 class RouteQuery(BaseModel):
     """根据用户问题决定路由策略。"""
-    datasource: str = Field(description="根据问题，选择‘vectorstore’或‘web_search’或‘direct’中的一种。")
+    datasource: str = Field(description="根据问题类型，从 ‘direct_chunk_search’, ‘hierarchical_search’, ‘web_search’, ‘direct’ 中选择一种最合适的路由策略。")
 
 class RewriteQuery(BaseModel):
     """一个经过优化的、更适合检索的用户问题版本。"""
@@ -67,10 +67,10 @@ class RelevanceGrade(BaseModel):
 # --- LLM 链定义 ---
 
 def get_query_router_chain():
-    """获取查询路由链"""
+    """获取查询路由链（已升级为智能路由）"""
     parser = JsonOutputParser(pydantic_object=RouteQuery)
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "你是一个查询路由专家。下面提供了一些从本地知识库检索到的、可能与用户问题相关的文档。请根据用户问题和这些文档，判断最合适的知识源。\n\n--- 上下文文档 ---\n{context}\n--- 上下文文档结束 ---\n\n决策指南：\n1. 如果上下文文档内容与用户问题高度相关，能够直接用于回答问题，请选择‘vectorstore’。\n2. 如果上下文文档不相关，但问题看起来需要最新的信息或广泛的通用知识，请选择‘web_search’。\n3. 如果问题非常简单，模型自身的知识就足够回答（例如“你好”），请选择‘direct’。\n\n{format_instructions}"),
+        ("system", "你是一位查询路由专家。请仔细分析用户的问题，并根据以下指南选择最合适的检索策略。\n\n决策指南：\n1. 如果问题是在**查找一个具体的、已知的实体**（例如药品名称、产品型号、公司名、特定术语），这类查询需要最高的查全率，请选择 ‘direct_chunk_search’。\n2. 如果问题是**开放性的、概念性的**（例如‘解释一下什么是RAG’、‘总结一下某某文件的主要内容’），需要先理解文档主旨再找细节，请选择 ‘hierarchical_search’。\n3. 如果问题需要**最新的信息**或广泛的通用知识（例如‘今天天气怎么样’、‘介绍一下最近的AI进展’），请选择 ‘web_search’。\n4. 如果问题是**简单的对话或问候**（例如‘你好’），请选择 ‘direct’。\n\n{format_instructions}"),
         ("human", "问题: {query}")
     ]).partial(format_instructions=parser.get_format_instructions())
     return prompt | llm | parser

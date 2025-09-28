@@ -146,7 +146,7 @@ def load_documents_from_directory(directory_path):
                 df = pd.read_excel(file_path)
                 for index, row in df.iterrows():
                     content_parts = []
-                    metadata = {"source": file_path, "row_index": index}
+                    metadata = {"source": file_path, "row_index": index, "data_type": "tabular"}
                     for col_name in df.columns:
                         value = row[col_name]
                         value_str = str(value) if not pd.isna(value) else ""
@@ -157,7 +157,11 @@ def load_documents_from_directory(directory_path):
                     documents.append(doc)
             elif ext in loader_map:
                 loader = loader_map[ext](file_path, encoding='utf-8') if ext == ".txt" else loader_map[ext](file_path)
-                documents.extend(loader.load())
+                loaded_docs = loader.load()
+                # 为叙事型文档打上标签
+                for doc in loaded_docs:
+                    doc.metadata["data_type"] = "narrative"
+                documents.extend(loaded_docs)
         except Exception as e:
             print(f"加载文件 {file_path} 失败: {e}")
     return documents

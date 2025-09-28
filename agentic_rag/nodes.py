@@ -11,31 +11,36 @@ from agentic_rag.chains import (
     get_query_router_chain, get_initial_rewriter_chain, get_correctional_rewriter_chain, 
     get_relevance_grader_chain, llm
 )
-from agentic_rag.hierarchical_retriever import hierarchical_retriever
+from agentic_rag.hierarchical_retriever import hierarchical_retriever, direct_chunk_retriever
 from agentic_rag.retrievers import get_web_search_tool
 from agentic_rag.state import AgentState
 
 # --- 节点函数定义 ---
 
 def route_query_node(state: AgentState) -> dict:
-    """路由节点：预先从向量库检索，然后根据上下文决定下一步操作。"""
-    print("--- 路由查询 ---")
+    """智能路由节点：首先决定路由策略，然后根据策略执行相应的检索。"""
+    print("--- 智能路由与调度 ---")
     query = state["query"]
     
-    # 1. 预检索
-    print("--- 使用分层检索进行预检索 ---")
-    documents = hierarchical_retriever(query)
-    
-    # 2. 带上下文的路由决策
+    # 1. 调用不带上下文的路由链进行决策
     router_chain = get_query_router_chain()
-    result = router_chain.invoke({"query": query, "context": documents})
-    print(f"路由决策: {result['datasource']}")
+    result = router_chain.invoke({"query": query})
+    route = result['datasource']
+    print(f"路由决策: {route}")
+
+    # 2. 根据决策执行操作
+    documents = []
+    if route == 'hierarchical_search':
+        print("--- 执行分层检索 ---")
+        documents = hierarchical_retriever(query)
+    elif route == 'direct_chunk_search':
+        print("--- 执行直接区块检索 ---")
+        documents = direct_chunk_retriever(query)
+    # 对于 web_search 和 direct，此节点不执行操作，仅传递路由决策
     
-    # 返回决策和已检索的文档
     return {
-        "route": result['datasource'], 
-        "documents": documents, 
-        "query": query
+        "route": route,
+        "documents": documents,
     }
 
 def web_search_node(state: AgentState) -> dict:

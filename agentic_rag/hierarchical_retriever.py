@@ -76,3 +76,27 @@ def hierarchical_retriever(query: str, n_docs=3, n_chunks=5) -> list[Document]:
         )
         
     return final_chunks
+
+def direct_chunk_retriever(query: str, n_chunks=5) -> list[Document]:
+    """
+    直接在区块集合中进行检索，用于表格型数据或需要高召回率的场景。
+    """
+    print("--- 执行直接区块检索 ---")
+    chunk_results = chunk_collection.query(
+        query_texts=[query],
+        n_results=n_chunks,
+        # 可选：未来可以增加where过滤器，如 where={"data_type": "tabular"}
+    )
+
+    if not chunk_results or not chunk_results.get('documents') or not chunk_results['documents'][0]:
+        print("在区块中未找到匹配项。")
+        return []
+
+    # 将检索结果格式化为LangChain的Document对象
+    final_chunks = []
+    for i, doc_text in enumerate(chunk_results['documents'][0]):
+        final_chunks.append(
+            Document(page_content=doc_text, metadata=chunk_results['metadatas'][0][i])
+        )
+        
+    return final_chunks
