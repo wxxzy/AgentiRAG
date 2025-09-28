@@ -18,6 +18,8 @@ class AgentState(TypedDict):
         route (str): 查询路由的结果（例如，'web_search', 'vectorstore', 'direct'）。
         is_relevant (bool): 答案是否与查询相关。
         error (Optional[str]): 工作流中发生的任何错误。
+        retrieved_memories (Optional[List[str]]): 从长期记忆库中检索到的相关记忆。
+        conversation_history (List): 存储当前对话的交互历史。
     """
     query: str
     updated_query: str
@@ -26,3 +28,5 @@ class AgentState(TypedDict):
     route: str
     is_relevant: bool
     error: Optional[str]
+    retrieved_memories: Optional[List[str]]
+    conversation_history: List

@@ -70,7 +70,7 @@ def get_query_router_chain():
     """获取查询路由链（已升级为智能路由）"""
     parser = JsonOutputParser(pydantic_object=RouteQuery)
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "你是一位查询路由专家。请仔细分析用户的问题，并根据以下指南选择最合适的检索策略。\n\n决策指南：\n1. 如果问题是在**查找一个具体的、已知的实体**（例如药品名称、产品型号、公司名、特定术语），这类查询需要最高的查全率，请选择 ‘direct_chunk_search’。\n2. 如果问题是**开放性的、概念性的**（例如‘解释一下什么是RAG’、‘总结一下某某文件的主要内容’），需要先理解文档主旨再找细节，请选择 ‘hierarchical_search’。\n3. 如果问题需要**最新的信息**或广泛的通用知识（例如‘今天天气怎么样’、‘介绍一下最近的AI进展’），请选择 ‘web_search’。\n4. 如果问题是**简单的对话或问候**（例如‘你好’），请选择 ‘direct’。\n\n{format_instructions}"),
+        ("system", "你是一位查询路由专家。请仔细分析用户的问题，并参考下面可能相关的历史记忆，然后根据指南选择最合适的检索策略。\n\n--- 历史记忆 ---\n{memories}\n--- 历史记忆结束 ---\n\n决策指南：\n1. 如果问题是在**查找一个具体的、已知的实体**（例如药品名称、产品型号、公司名、特定术语），这类查询需要最高的查全率，请选择 ‘direct_chunk_search’。\n2. 如果问题是**开放性的、概念性的**（例如‘解释一下什么是RAG’、‘总结一下某某文件的主要内容’），需要先理解文档主旨再找细节，请选择 ‘hierarchical_search’。\n3. 如果问题需要**最新的信息**或广泛的通用知识（例如‘今天天气怎么样’、‘介绍一下最近的AI进展’），请选择 ‘web_search’。\n4. 如果问题是**简单的对话或问候**（例如‘你好’），请选择 ‘direct’。\n\n{format_instructions}"),
         ("human", "问题: {query}")
     ]).partial(format_instructions=parser.get_format_instructions())
     return prompt | llm | parser
@@ -110,3 +110,18 @@ def get_summarizer_chain():
         ("human", "文档内容:\n\n{document_content}")
     ])
     return prompt | llm
+
+class MemoryToSave(BaseModel):
+    """用于存储到长期记忆库的结构化信息。"""
+    text: str = Field(description="需要被记住的关键信息、事实或结论的文本。")
+    type: str = Field(description="记忆的类型，从 ['fact', 'preference', 'conclusion'] 中选择一种。")
+    importance: int = Field(description="该条记忆的重要性评分，范围从1到10。")
+
+def get_memory_consolidation_chain():
+    """获取记忆提炼链，用于在对话结束后总结并形成结构化记忆。"""
+    parser = JsonOutputParser(pydantic_object=MemoryToSave)
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "你是一个记忆提炼专家。请分析以下对话，并从中提取出最值得长期记住的核心信息。如果对话没有包含任何有价值、可供未来参考的信息，请回答‘No valuable information to save’。\n\n{format_instructions}"),
+        ("human", "对话历史:\n\n{conversation_history}")
+    ]).partial(format_instructions=parser.get_format_instructions())
+    return prompt | llm | parser
