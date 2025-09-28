@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-@desc: RAG各环节评估脚本
+@desc: RAG各环节评估脚本（已适配分层检索架构）
 """
 import sys
 import os
@@ -26,7 +26,8 @@ from agentic_rag.nodes import (
     rewrite_query_node,
     grade_relevance_node
 )
-from agentic_rag.retrievers import get_retriever
+# 导入新的分层检索器
+from agentic_rag.hierarchical_retriever import hierarchical_retriever
 # 导入项目中已配置好的llm和embedding function，用于传递给Ragas
 from agentic_rag.chains import llm, get_embedding_function
 
@@ -37,6 +38,7 @@ DATASET_PATH = os.path.join(os.path.dirname(__file__), "golden_dataset.csv")
 def evaluate_router():
     """
     评估路由节点（route_query_node）的性能。
+    此函数无需修改，因为route_query_node内部已更新为分层检索，改动被良好地封装了。
     """
     print("--- 开始评估【路由】环节 ---")
     
@@ -108,8 +110,6 @@ def evaluate_generator_and_retriever():
     retrieved_contexts = []
     ideal_answers = []
 
-    retriever = get_retriever()
-
     for index, row in tqdm(rag_questions_df.iterrows(), total=rag_questions_df.shape[0], desc="测试生成节点"):
         question = row['question']
         
@@ -122,12 +122,13 @@ def evaluate_generator_and_retriever():
             print(f"重写节点执行出错: {e}")
             current_state['updated_query'] = question
 
+        # --- 修改点：调用新的分层检索器 ---
         try:
-            retrieved_docs = retriever.invoke(current_state['updated_query'])
+            retrieved_docs = hierarchical_retriever(current_state['updated_query'])
             contexts = [doc.page_content for doc in retrieved_docs]
             current_state['documents'] = retrieved_docs
         except Exception as e:
-            print(f"检索器执行出错: {e}")
+            print(f"分层检索器执行出错: {e}")
             contexts = []
             current_state['documents'] = []
 
@@ -157,9 +158,6 @@ def evaluate_generator_and_retriever():
     
     print("\n--- Ragas 评估报告 ---")
     try:
-        # --- 官方文档推荐方案 ---
-        # 直接将langchain的llm和embeddings对象传递给evaluate函数
-        # Ragas会自动进行包装和处理
         result = evaluate(
             dataset=dataset,
             metrics=[
@@ -184,13 +182,11 @@ def evaluate_grader():
     评估相关性评估节点（grade_relevance_node）的性能。
     """
     print("\n--- 【评估】环节评估（占位） ---")
-    print("评估'评估节点'需要一个专门的数据集，其中包含（问题，答案）对以及它们是否相关的标签ảng")
-    print("请创建一个类似'grader_dataset.csv'的文件，包含'question', 'answer', 'is_relevant'列ảng")
-    print("然后可以仿照'evaluate_router'函数来编写此处的评估逻辑ảng")
+    print("评估'评估节点'需要一个专门的数据集ảng")
 
 
 def main():
-    "主函数，按顺序执行所有评估。"
+    """主函数，按顺序执行所有评估。"""
     evaluate_router()
     evaluate_generator_and_retriever()
     evaluate_grader()
