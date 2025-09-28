@@ -11,7 +11,8 @@ from agentic_rag.chains import (
     get_query_router_chain, get_initial_rewriter_chain, get_correctional_rewriter_chain, 
     get_relevance_grader_chain, llm
 )
-from agentic_rag.retrievers import get_retriever, get_web_search_tool
+from agentic_rag.hierarchical_retriever import hierarchical_retriever
+from agentic_rag.retrievers import get_web_search_tool
 from agentic_rag.state import AgentState
 
 # --- 节点函数定义 ---
@@ -22,9 +23,8 @@ def route_query_node(state: AgentState) -> dict:
     query = state["query"]
     
     # 1. 预检索
-    print("--- 预检索文档 ---")
-    retriever = get_retriever()
-    documents = retriever.invoke(query)
+    print("--- 使用分层检索进行预检索 ---")
+    documents = hierarchical_retriever(query)
     
     # 2. 带上下文的路由决策
     router_chain = get_query_router_chain()

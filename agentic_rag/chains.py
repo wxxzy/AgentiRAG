@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_huggingface import HuggingFaceEmbeddings
+from chromadb.utils import embedding_functions
 
 from config import (
     LLM_MODEL_NAME, OPENAI_API_BASE,
@@ -43,8 +44,8 @@ def get_embedding_function():
         return OpenAIEmbeddings(**embedding_params)
     
     elif EMBEDDING_PROVIDER == 'local':
-        print(f"--- 使用本地嵌入模型: {LOCAL_EMBEDDING_MODEL_PATH} ---")
-        return HuggingFaceEmbeddings(model_name=LOCAL_EMBEDDING_MODEL_PATH)
+        print(f"--- 使用ChromaDB原生本地嵌入模型: {LOCAL_EMBEDDING_MODEL_PATH} ---")
+        return embedding_functions.SentenceTransformerEmbeddingFunction(model_name=LOCAL_EMBEDDING_MODEL_PATH)
         
     else:
         raise ValueError(f"未知的嵌入模型提供商: {EMBEDDING_PROVIDER}。请选择 'openai' 或 'local'。")
@@ -101,3 +102,11 @@ def get_relevance_grader_chain():
         ("human", "问题: {query}\n答案: {response}")
     ]).partial(format_instructions=parser.get_format_instructions())
     return prompt | llm | parser
+
+def get_summarizer_chain():
+    """获取文档摘要链"""
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "你是一个文档摘要专家。请为以下文档生成一个简洁但全面的摘要，摘要应捕获所有核心主题、关键实体和结论，以便后续能通过摘要判断文档与用户问题的相关性。"),
+        ("human", "文档内容:\n\n{document_content}")
+    ])
+    return prompt | llm
