@@ -1,0 +1,8 @@
+question_id,question,ideal_route,ideal_context_keywords,ideal_answer_summary
+1,"我们公司今年的年假规定是什么？",vectorstore,"年假,休假,规定,政策","应提及年假天数、申请流程和特殊规定"
+2,"最近AI领域有什么好玩的新闻吗？",web_search,"AI,人工智能,新闻,进展","应包含近期发布的模型或技术，如GPT-5、Sora等"
+3,"你好啊",direct,"","简单问候即可"
+4,"解释一下什么是RAG",vectorstore,"RAG,检索增强生成,原理","应解释RAG的核心思想：检索+生成"
+5,"帮我把‘公司报销政策’和‘出差申请流程’这两个文档的内容总结一下",vectorstore,"报销,出差,申请,政策","应分别总结两个文档的核心内容"
+6,"今天上海的天气怎么样？",web_search,"上海,天气","应返回今天的实时天气情况"
+7,"你叫什么名字？",direct,"","简单回答自己的身份"

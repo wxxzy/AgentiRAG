@@ -17,7 +17,7 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
 # --- LLM --- 
 # 使用的模型名称 (例如 "gpt-4o", "custom-model-name")
-LLM_MODEL_NAME = "deepseek-v3-1-250821"
+LLM_MODEL_NAME = "doubao-seed-1-6-250615"
 # LLM_MODEL_NAME = "qwen-turbo"
 
 # 如果您使用自定义的、兼容OpenAI API的端点（例如Ollama, LocalAI等），请在此处设置其URL
