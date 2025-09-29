@@ -17,3 +17,5 @@ nltk
 langchain-huggingface
 tqdm
 langchain-chroma
+duckdb
+duckdb-engine
