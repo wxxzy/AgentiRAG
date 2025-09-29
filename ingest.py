@@ -46,11 +46,19 @@ def process_document_worker(doc):
         doc_source = f"{doc_source}_row_{doc.metadata['row_index']}"
 
     try:
-        # 1. 生成摘要
-        summary = summarizer_chain.invoke({"document_content": doc_content}).content
+        # 1. 根据数据类型智能生成摘要
+        doc_type = doc.metadata.get('data_type', 'narrative') # 默认为叙事型
+        summary = ""
+        if doc_type == 'narrative':
+            # 对叙事型文档，调用LLM生成摘要
+            summary = summarizer_chain.invoke({"document_content": doc_content}).content
+        elif doc_type == 'tabular':
+            # 对表格型数据，直接使用原文作为摘要，免除LLM调用
+            summary = doc_content
+        
         summary_metadata = {"source": doc_source}
 
-        # 2. 切分区块
+        # 2. 切分区块（对于表格行，通常只切分出它自身）
         splits = text_splitter.split_documents([doc])
         chunk_docs = [split.page_content for split in splits]
         chunk_metadatas = [split.metadata for split in splits]
@@ -108,22 +116,39 @@ def main():
         print("未能成功处理任何文档，注入中止。" )
         return
 
-    # 4. 批量存入数据库
-    print("---" + " 开始批量存入向量数据库" + " ---")
+    # 4. 批量存入数据库（分批次）
+    print("--- 开始批量存入向量数据库 ---")
     embedding_function = get_embedding_function()
     client = chromadb.PersistentClient(path=PERSIST_PATH)
+    
+    # 定义一个合理的批次大小
+    CHROMA_BATCH_SIZE = 4096
 
     # 批量存入摘要
-    print(f"正在批量存入 {len(all_summary_ids)} 条摘要...")
     summary_collection = client.get_or_create_collection(SUMMARY_COLLECTION_NAME, embedding_function=embedding_function)
-    summary_collection.add(ids=all_summary_ids, documents=all_summaries, metadatas=all_summary_metadatas)
+    total_summaries = len(all_summary_ids)
+    print(f"正在分批存入 {total_summaries} 条摘要...")
+    for i in tqdm(range(0, total_summaries, CHROMA_BATCH_SIZE), desc="存入摘要"):
+        end_i = min(i + CHROMA_BATCH_SIZE, total_summaries)
+        summary_collection.add(
+            ids=all_summary_ids[i:end_i],
+            documents=all_summaries[i:end_i],
+            metadatas=all_summary_metadatas[i:end_i]
+        )
 
     # 批量存入区块
-    print(f"正在批量存入 {len(all_chunk_ids)} 个区块...")
     chunk_collection = client.get_or_create_collection(CHUNK_COLLECTION_NAME, embedding_function=embedding_function)
-    chunk_collection.add(ids=all_chunk_ids, documents=all_chunks, metadatas=all_chunk_metadatas)
+    total_chunks = len(all_chunk_ids)
+    print(f"正在分批存入 {total_chunks} 个区块...")
+    for i in tqdm(range(0, total_chunks, CHROMA_BATCH_SIZE), desc="存入区块"):
+        end_i = min(i + CHROMA_BATCH_SIZE, total_chunks)
+        chunk_collection.add(
+            ids=all_chunk_ids[i:end_i],
+            documents=all_chunks[i:end_i],
+            metadatas=all_chunk_metadatas[i:end_i]
+        )
 
-    print("\n---" + " 并行化数据注入完成" + " ---")
+    print("\n--- 并行化数据注入完成 ---")
     print(f"知识库已成功构建在 '{PERSIST_PATH}' 中。" )
 
 # --- 辅助函数定义 ---
