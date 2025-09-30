@@ -15,6 +15,7 @@ pandas
 msoffcrypto-tool
 nltk
 langchain-huggingface
+huggingface_hub[hf_xet]
 tqdm
 langchain-chroma
 duckdb
