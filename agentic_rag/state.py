@@ -30,3 +30,4 @@ class AgentState(TypedDict):
     error: Optional[str]
     retrieved_memories: Optional[List[str]]
     conversation_history: List
+    correction_attempts: int

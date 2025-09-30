@@ -37,7 +37,7 @@ def build_graph():
     workflow.set_entry_point("retrieve_memory")
     workflow.add_edge("retrieve_memory", "route_query")
 
-    # 2. 从“路由”分发
+    # 2. 从“路由”后，根据（可能被修改过的）路由进行分发
     workflow.add_conditional_edges(
         "route_query",
         lambda state: state["route"],
@@ -49,10 +49,10 @@ def build_graph():
         }
     )
     
-    # 3. “直接回答”后进行评估
+    # 4. “直接回答”后进行评估
     workflow.add_edge("direct_response", "grade_relevance")
 
-    # 4. “重写查询”后根据路由决策分发
+    # 5. “重写查询”后根据路由决策分发
     workflow.add_conditional_edges(
         "rewrite_query",
         lambda state: state["route"],
@@ -63,19 +63,31 @@ def build_graph():
         }
     )
 
-    # 5. “网络搜索”后生成答案
+    # 6. “网络搜索”后生成答案
     workflow.add_edge("web_search", "generate_response")
 
-    # 6. “生成答案”后评估相关性
+    # 7. “生成答案”后评估相关性
     workflow.add_edge("generate_response", "grade_relevance")
 
     # 7. 根据“相关性评估”结果，决定是“复盘记忆”还是“重写”
+    def decide_after_grading(state: AgentState):
+        """在评估答案后，决定是结束、重试还是继续。"""
+        if state["is_relevant"]:
+            return "continue"
+        
+        if state.get("correction_attempts", 0) >= 2:
+            print("--- 已达到最大重试次数，流程结束 ---")
+            return "end"
+        else:
+            return "retry"
+
     workflow.add_conditional_edges(
         "grade_relevance",
-        lambda state: state["is_relevant"],
+        decide_after_grading,
         {
-            True: "consolidate_memory",    # 答案相关，去“复盘”并形成记忆
-            False: "rewrite_query"        # 答案不相关，重写查询
+            "continue": "consolidate_memory", # 答案相关，去“复盘”并形成记忆
+            "end": END,                      # 达到最大重试次数，结束
+            "retry": "rewrite_query"         # 答案不相关，重写查询
         }
     )
     

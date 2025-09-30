@@ -28,7 +28,8 @@ def retrieve_memory_node(state: AgentState) -> dict:
     print(f"检索到的记忆: {memories_text}")
     return {
         "retrieved_memories": memories_text,
-        "conversation_history": [] # 初始化对话历史
+        "conversation_history": [], # 初始化对话历史
+        "correction_attempts": 0, # 初始化重试计数器
     }
 
 def consolidate_memory_node(state: AgentState) -> dict:
@@ -45,8 +46,13 @@ def consolidate_memory_node(state: AgentState) -> dict:
     consolidation_chain = get_memory_consolidation_chain()
     try:
         result = consolidation_chain.invoke({"conversation_history": history_text})
-        if result and result.text and "No valuable information" not in result.text:
-            memory.add_memory(text=result.text, type=result.type, importance=result.importance)
+        
+        # NEW: Handle inconsistent chain output (sometimes a list, sometimes a dict)
+        if isinstance(result, list) and result:
+            result = result[0]
+
+        if isinstance(result, dict) and result.get("text") and "No valuable information" not in result.get("text"):
+            memory.add_memory(text=result["text"], type=result["type"], importance=result["importance"])
     except Exception as e:
         # 如果记忆提炼失败，不影响主流程
         print(f"记忆提炼失败: {e}")
@@ -74,6 +80,13 @@ def route_query_node(state: AgentState) -> dict:
     elif route == 'direct_chunk_search':
         documents = direct_chunk_retriever(query)
     
+    # 3. 如果本地检索无果，则回退到网络搜索
+    if route in ["hierarchical_search", "direct_chunk_search"] and not documents:
+        print("--- 本地检索无结果，转为网络搜索 ---")
+        route = "web_search"
+    else:
+        print("--- 本地检索到结果，继续流程 ---")
+
     # 记录到对话历史
     history = state.get("conversation_history", [])
     history.append(("Human", query))
@@ -141,4 +154,5 @@ def grade_relevance_node(state: AgentState) -> dict:
         return {"is_relevant": True}
     else:
         print("--- 答案不相关，将触发重写 ---")
-        return {"is_relevant": False}
+        attempts = state.get("correction_attempts", 0) + 1
+        return {"is_relevant": False, "correction_attempts": attempts}
