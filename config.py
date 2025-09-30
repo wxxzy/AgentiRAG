@@ -40,7 +40,7 @@ EMBEDDING_MODEL_NAME = "text-embedding-3-small"
 # -- 本地嵌入模型配置 (当 EMBEDDING_PROVIDER = 'local') --
 # 指定本地模型的路径或HuggingFace模型库的ID
 # 例如: 'sentence-transformers/all-MiniLM-L6-v2'
-LOCAL_EMBEDDING_MODEL_PATH = "sentence-transformers/all-MiniLM-L6-v2"
+LOCAL_EMBEDDING_MODEL_PATH = "BAAI/bge-m3"
 
 # --- Excel 数据加载配置 ---
 # 在加载Excel文件时，指定哪些列应该被提取为文档的元数据。
