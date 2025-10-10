@@ -7,6 +7,8 @@ python-dotenv
 tiktoken
 langchain-tavily
 sentence-transformers
+torch>=2.6
+safetensors
 unstructured
 pypdf
 openpyxl

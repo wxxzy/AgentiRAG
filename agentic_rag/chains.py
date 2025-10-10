@@ -5,6 +5,7 @@
 定义了系统中使用的各种LLM链，例如查询路由、查询重写和答案评估。
 """
 
+import torch
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 from langchain_core.output_parsers import JsonOutputParser
@@ -44,8 +45,12 @@ def get_embedding_function():
         return OpenAIEmbeddings(**embedding_params)
     
     elif EMBEDDING_PROVIDER == 'local':
-        print(f"--- 使用ChromaDB原生本地嵌入模型: {LOCAL_EMBEDDING_MODEL_PATH} ---")
-        return embedding_functions.SentenceTransformerEmbeddingFunction(model_name=LOCAL_EMBEDDING_MODEL_PATH)
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"--- 使用ChromaDB原生本地嵌入模型: {LOCAL_EMBEDDING_MODEL_PATH} (设备: {device}) ---")
+        return embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name=LOCAL_EMBEDDING_MODEL_PATH,
+            device=device
+        )
         
     else:
         raise ValueError(f"未知的嵌入模型提供商: {EMBEDDING_PROVIDER}。请选择 'openai' 或 'local'。")

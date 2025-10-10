@@ -75,6 +75,20 @@ def main():
     主函数：执行并行化和批处理的数据注入流程。
     """
     print("---" + " 开始并行化数据注入流程" + " ---")
+    try:
+        import torch
+        print("\n--- GPU诊断信息 ---")
+        print(f"PyTorch version: {torch.__version__}")
+        print(f"CUDA available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            print(f"CUDA version: {torch.version.cuda}")
+            print(f"GPU count: {torch.cuda.device_count()}")
+            print(f"GPU name: {torch.cuda.get_device_name(0)}")
+        else:
+            print("警告: PyTorch 未找到可用的 CUDA 设备。模型将运行在 CPU 上。")
+        print("--- GPU诊断结束 ---\n")
+    except ImportError:
+        print("\n警告: 未安装 PyTorch。无法进行 GPU 诊断。\n")
 
     if os.path.exists(PERSIST_PATH):
         print(f"正在删除旧的数据库 '{PERSIST_PATH}'...")
