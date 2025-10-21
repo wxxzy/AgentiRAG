@@ -1,152 +1,139 @@
-# Agentic RAG 系统工作流程详解
+# Agentic RAG 系统工作流程详解 (v2 - 双循环架构)
 
 ## 1. 概述
 
 本文档详细描述了 Agentic RAG 问答系统的内部工作流程。系统基于 LangGraph 构建，其核心是一个状态图（State Graph），通过一系列功能节点（Node）和条件边（Conditional Edge）的组合，实现对用户问题的智能分析、检索、生成和自我修正。
 
-整个流程可以概括为：**接收问题 -> 思考策略 -> 检索信息 -> 生成答案 -> 评估修正 -> 给出答复**。
+**v2架构核心思想：双循环（Dual-Loop）系统**
+
+为提升系统的鲁棒性和效率，新架构引入了“内外双循环”机制：
+
+1.  **内循环 (Retrieval Self-Correction)**: 一个快速、低成本的“检索-评估-重试”循环。在调用昂贵的LLM生成答案**之前**，系统会先对检索到的文档进行相关性评估。如果文档质量不佳，系统会自动切换检索策略并重试，确保“原材料”的质量。
+2.  **外循环 (Answer Self-Correction)**: 在文档质量达标并生成答案后，系统会启动外循环，对最终答案进行评估。如果答案不解决问题，系统会尝试修正性地重写查询，并重新进入整个流程。
+
+这种设计避免了基于低质量文档的无效计算，并赋予了系统在两个层面上的自我纠正能力。
 
 ## 2. 核心节点 (Nodes)
 
-节点是工作流中的基本处理单元，每个节点负责一项具体任务。
+| 节点名称 | 功能描述 |
+| --- | --- |
+| `retrieve_memory_node` | **检索长期记忆**：流程入口。从长期记忆库检索历史信息，为后续决策提供背景。 |
+| `route_query_node` | **智能路由决策**：系统的“大脑”。根据问题和记忆，仅负责决定一个**初始**的最佳检索策略（`route`），但**不执行**检索。 |
+| `rewrite_query_node` | **查询重写**：优化用户问题，使其更适合检索。分为“初始重写”和“纠错性重写”两种模式。 |
+| `retrieve_documents_node` | **文档检索 (内循环核心)**：根据当前`route`策略执行检索（本地或网络）。当内循环触发重试时，此节点会被反复调用。 |
+| `grade_documents_node` | **文档相关性评估 (内循环核心)**：评估检索到的文档是否足以回答问题，是内循环的决策依据。 |
+| `generate_response_node` | **生成答案**：在内循环确认文档质量后，调用 LLM，根据高质量的上下文生成最终答案。 |
+| `direct_response_node` | **直接回答**：当问题无需检索时，直接调用 LLM 回答。 |
+| `grade_relevance_node` | **答案相关性评估 (外循环核心)**：评估最终生成的答案是否解决了用户问题，是外循环的决策依据。 |
+| `consolidate_memory_node`| **复盘并巩固记忆**：在流程成功结束后，提炼并存储本次问答的核心内容到长期记忆库。 |
 
-| 节点名称                 | 功能描述                                                                                             |
-| ------------------------ | ---------------------------------------------------------------------------------------------------- |
-| `retrieve_memory_node`   | **检索长期记忆**：流程的入口。根据当前问题，从长期记忆库中检索相关的历史对话或结论，为后续决策提供背景信息。 |
-| `route_query_node`       | **智能路由与本地检索**：系统的“大脑”。它决定处理问题的最佳路径，并内置了**回退逻辑**。                     |
-| `rewrite_query_node`     | **查询重写**：优化用户的原始问题，使其更适合作为搜索引擎或数据库的输入。分为“初始重写”和“纠错性重写”两种模式。 |
-| `web_search_node`        | **网络搜索**：当需要获取最新信息或本地知识库没有相关内容时，调用此节点，使用 Tavily API 进行网络搜索。       |
-| `generate_response_node` | **生成答案**：根据检索到的上下文信息（来自本地或网络）和重写后的问题，调用 LLM 生成最终答案。             |
-| `direct_response_node`   | **直接回答**：当问题不需要任何外部知识（如“你好”）时，直接调用 LLM 进行回答。                               |
-| `grade_relevance_node`   | **相关性评估**：对 `generate_response_node` 或 `direct_response_node` 生成的答案进行评估，判断其是否解决了用户问题。 |
-| `consolidate_memory_node`| **复盘并巩固记忆**：在流程成功结束后，将本次问答的核心内容提炼成一条新的记忆，存入长期记忆库，用于未来的学习。 |
+## 3. 工作流详解
 
-## 3. 工作流详解 (Edges & Conditions)
+```mermaid
+graph TD
+    A[Start: Retrieve Memory] --> B(Route Query);
+    B --> C{Initial Routing};
+    C -->|direct| D(Direct Response);
+    C -->|search| E(Rewrite Query);
 
-系统的工作流程由节点间的“边”连接而成，其中“条件边”负责根据当前状态（`AgentState`）进行决策。
+    subgraph Inner Loop: Retrieval Self-Correction
+        E --> F(Retrieve Documents);
+        F --> G(Grade Documents);
+        G --> H{Documents Relevant?};
+        H -->|No| I{More Strategies?};
+        I -->|Yes| F;
+        I -->|No| Z(END);
+    end
+
+    H -->|Yes| J(Generate Response);
+
+    subgraph Outer Loop: Answer Self-Correction
+        J --> K(Grade Final Answer);
+        D --> K;
+        K --> L{Answer Relevant?};
+        L -->|No| M{Max Retries?};
+        M -->|No| E;
+    end
+
+    L -->|Yes| N(Consolidate Memory);
+    M -->|Yes| N;
+    N --> Z;
+```
 
 ---
 
 ### **第一步: 记忆检索 (`retrieve_memory`)**
-
-- **触发**: 系统接收到用户问题，流程开始。
-- **动作**: 调用 `retrieve_memory_node`，从 `long_term_memory.sqlite` 数据库中寻找与当前问题相关的记忆。同时，初始化对话历史和重试计数器 `correction_attempts = 0`。
-- **流向**: 无条件流向 `route_query`。
+- **触发**: 系统接收到用户问题。
+- **动作**: 调用 `retrieve_memory_node`，检索相关历史记忆，并初始化各种状态（如重试计数器）。
+- **流向**: `route_query`。
 
 ---
 
-### **第二步: 智能路由与回退决策 (`route_query`)**
-
+### **第二步: 智能路由决策 (`route_query`)**
 - **触发**: 上一步完成。
-- **动作**: 这是系统的核心决策点。
-    1.  **路由判断**: 节点内的 `router_chain` 会根据用户问题和上一步检索到的记忆，决定一个初步的策略（`route`），可能的值为：
-        - `direct`: 无需检索，直接回答。
-        - `hierarchical_search`: 需要进行分层检索（适用于开放性、概念性问题）。
-        - `direct_chunk_search`: 需要进行直接区块检索（适用于精确查找特定实体）。
-        - `web_search`: 需要进行网络搜索。
-    2.  **本地检索**: 如果初步策略是 `hierarchical_search` 或 `direct_chunk_search`，则立即执行相应的本地 ChromaDB 检索，并将结果存入 `documents` 列表。
-    3.  **回退逻辑 (Fallback)**: 在本地检索执行完毕后，**在节点内部进行检查**：
-        - **如果 `documents` 列表不为空**，说明本地检索成功，流程继续。
-        - **如果 `documents` 列表为空**，说明本地知识库没有相关信息。此时，节点会**强制将 `route` 的值修改为 `web_search`**，并打印提示“本地检索无结果，转为网络搜索”。
-- **流向**: 无条件流向下一步的“路由分发”条件边。
+- **动作**: `route_query_node` 仅做决策，它分析问题和记忆，确定一个**初始**检索策略（`route`），如 `hierarchical_search`，并初始化 `tried_routes` 列表。
+- **流向**: 根据 `route` 结果进行条件分发。如果需要检索，流向 `rewrite_query`；如果是 `direct`，则流向 `direct_response`。
 
 ---
 
-### **第三步: 路由分发 (Conditional Edge)**
-
-- **触发**: `route_query` 节点完成。
-- **决策**: 系统检查当前状态中的 `route` 值（此值可能已被上一步的回退逻辑修改）。
-    - **如果 `route` 是 `direct`**: 流程走向 `direct_response_node`。
-    - **如果 `route` 是任何一种搜索类型** (`web_search`, `hierarchical_search`, `direct_chunk_search`): 流程走向 `rewrite_query_node`。
+### **第三步: 查询重写 (`rewrite_query`)**
+- **触发**: 路由决策需要进行检索。
+- **动作**: `rewrite_query_node` 对问题进行优化，为检索做准备。
+- **流向**: `retrieve_documents`。
 
 ---
 
-### **第四步: 查询重写 (`rewrite_query`)**
+### **第四步: 内循环 - 检索与评估**
 
-- **触发**: 上一步的路由决策指向了搜索。
-- **动作**:
-    - **初始重写**: 如果这是第一次进入该节点，它会将用户问题改写得更适合机器检索。
-    - **纠错性重写**: 如果是因为后续“答案不相关”而循环回到此节点，它会结合上一次失败的答案，对问题进行修正，尝试新的检索角度。
-- **流向**: 无条件流向下一步的“检索执行”条件边。
+这是系统的第一个自省循环，目标是确保文档质量。
 
----
+1.  **`retrieve_documents_node`**: 
+    - **触发**: `rewrite_query` 完成，或内循环重试。
+    - **动作**: 根据当前状态中的 `route` 值（例如 `hierarchical_search`），执行相应的检索操作。它还会处理“本地检索无果则自动转网络搜索”的逻辑。
+    - **流向**: `grade_documents`。
 
-### **第五步: 检索执行 (Conditional Edge)**
+2.  **`grade_documents_node`**: 
+    - **触发**: 文档检索完成。
+    - **动作**: 调用 `get_document_relevance_grader_chain`，评估 `documents` 列表与问题的相关性，并将结果（`True` 或 `False`）存入 `documents_are_relevant` 状态。
+    - **流向**: “文档评估决策”条件边。
 
-- **触发**: `rewrite_query` 节点完成。
-- **决策**: 系统再次检查当前状态中的 `route` 值。
-    - **如果 `route` 是 `web_search`**: 流程走向 `web_search_node`，去执行真正的网络搜索。
-    - **如果 `route` 是 `hierarchical_search` 或 `direct_chunk_search`**: **流程直接走向 `generate_response_node`**。因为在第二步的 `route_query_node` 中，本地文档（`documents`）已经检索并加载到状态中了，无需重复检索。
-
----
-
-### **第六步: 答案生成**
-
-- **触发**:
-    - `direct_response_node`: 由第三步的 `direct` 路由触发。
-    - `web_search_node`: 完成网络搜索后，流向 `generate_response_node`。
-    - `rewrite_query_node`: 对于本地检索，由第五步的条件决策触发，流向 `generate_response_node`。
-- **动作**:
-    - `direct_response_node`: 直接让 LLM 回答。
-    - `generate_response_node`: 结合 `documents`（无论来自本地还是网络）和 `updated_query`，让 LLM 生成答案。
-- **流向**: 所有答案生成后，统一流向 `grade_relevance_node` 进行评估。
+3.  **文档评估决策 (Conditional Edge)**:
+    - **触发**: `grade_documents` 完成。
+    - **决策** (`decide_after_document_grading` 函数):
+        - **如果 `documents_are_relevant` 为 `True`**: 评估通过。决策为 `generate`，流程跳出内循环，走向 `generate_response_node`。
+        - **如果为 `False`**: 评估失败。系统检查 `tried_routes` 列表，从 `['hierarchical_search', 'direct_chunk_search', 'web_search']` 中寻找一个尚未尝试的策略。
+            - **如果找到新策略**: 更新状态中的 `route` 和 `tried_routes`，决策为 `retry_retrieve`，流程**循环回到 `retrieve_documents_node`**，使用新策略重试。
+            - **如果所有策略都已尝试**: 说明无法找到相关文档，触发**熔断**。决策为 `fallback`，流程直接走向 `END`。
 
 ---
 
-### **第七步: 相关性评估与熔断 (Conditional Edge)**
-
-- **触发**: `grade_relevance_node` 完成评估。
-- **决策**: 这是系统的“自我修正”与“熔断”机制，由 `decide_after_grading` 函数控制。
-    1.  **检查相关性**:
-        - **如果答案被判定为 `is_relevant: True`**: 说明答案质量合格。决策为 `continue`，流程走向 `consolidate_memory_node`。
-    2.  **检查重试次数**:
-        - **如果答案 `is_relevant: False`**: 系统会检查重试计数器 `correction_attempts`。
-        - **如果 `correction_attempts < 2`**: 说明还可以再试。决策为 `retry`，流程**循环回到 `rewrite_query_node`**，开始新一轮的纠错尝试。
-        - **如果 `correction_attempts >= 2`**: 说明已经尝试了2次但仍失败。为避免无限循环，触发**熔断机制**。决策为 `end`，**流程直接终止**，并打印“已达到最大重试次数”的提示。
+### **第五步: 答案生成 (`generate_response`)**
+- **触发**: 内循环成功完成，确认文档质量合格。
+- **动作**: `generate_response_node` 结合高质量的 `documents` 和 `updated_query`，让 LLM 生成答案。
+- **流向**: `grade_relevance`。
 
 ---
 
-### **第八步: 记忆巩固与结束**
+### **第六步: 外循环 - 答案评估与修正**
 
-- **触发**: 上一步的决策为 `continue`。
-- **动作**: `consolidate_memory_node` 会总结本次成功的问答，并存入长期记忆。
-- **流向**:
-    - 从 `consolidate_memory_node` -> `END` (流程正常结束)。
-    - 从第七步的熔断机制 -> `END` (流程异常结束)。
+这是系统的第二个自省循环，目标是确保最终答案的质量。
 
-## 4. 示例追踪：查询 “999感冒灵的商品详情”
+1.  **`grade_relevance_node`**: 
+    - **触发**: `generate_response_node` 或 `direct_response_node` 完成。
+    - **动作**: 调用 `get_relevance_grader_chain`，评估 `response` 是否解决了用户问题，更新 `is_relevant` 状态。
+    - **流向**: “答案评估决策”条件边。
 
-为了更具体地理解上述流程，我们以一个实际查询为例，追踪其在系统内部的完整生命周期。
+2.  **答案评估决策 (Conditional Edge)**:
+    - **触发**: `grade_relevance` 完成。
+    - **决策** (`decide_after_answer_grading` 函数):
+        - **如果 `is_relevant` 为 `True`**: 答案合格。决策为 `end`，流程走向 `consolidate_memory`。
+        - **如果为 `False`**: 答案不合格。检查重试次数 `correction_attempts`。
+            - **如果次数未达上限 (2次)**: 决策为 `retry`，流程**循环回到 `rewrite_query_node`**，启动一次“纠错性重写”，并重新进入整个检索和生成流程。
+            - **如果达到上限**: 触发**熔断**。决策为 `end`，流程走向 `consolidate_memory`。
 
-**场景**: 首次查询，此时本地知识库中没有任何关于“999感冒灵”的信息。
+---
 
-1.  **`retrieve_memory_node`**: 系统接收到问题 “999感冒灵的商品详情”。此时长期记忆库为空，节点返回 “无相关历史记忆”。
-    - **状态更新**: `correction_attempts = 0`
-
-2.  **`route_query_node`**: 
-    - **路由判断**: 链分析问题，认为这是一个精确的实体查找，初步决策 `route = "direct_chunk_search"`。
-    - **本地检索**: 系统使用 `direct_chunk_retriever` 在 ChromaDB 中搜索，但一无所获。
-    - **回退逻辑**: 节点检查到 `documents` 列表为空，**触发回退机制**。它在内部将 `route` 的值从 `"direct_chunk_search"` 修改为 `"web_search"`。
-    - **状态更新**: `route = "web_search"`, `documents = []`
-
-3.  **路由分发 (条件边)**: 检测到 `state["route"]` 是 `"web_search"`，于是将流程导向 `rewrite_query_node`。
-
-4.  **`rewrite_query_node`**: 接收到原始问题，进行“初始重写”，可能将其优化为更适合搜索引擎的查询，例如：“999感冒灵颗粒 药品说明书 成分 功效 用法用量 价格”。
-    - **状态更新**: `updated_query = "..."`
-
-5.  **检索执行 (条件边)**: 再次检测 `state["route"]`，值依然是 `"web_search"`，因此流程被导向 `web_search_node`。
-
-6.  **`web_search_node`**: 使用重写后的查询 `updated_query` 调用 Tavily API，执行网络搜索，并将搜索结果（如网页摘要）填充到 `documents` 列表中。
-    - **状态更新**: `documents = ["网络搜索结果1...", "网络搜索结果2..."]`
-
-7.  **`generate_response_node`**: 接收到来自网络的 `documents` 和 `updated_query`，调用 LLM 生成一个包含商品详情的详细答案。
-    - **状态更新**: `response = "根据网络信息，999感冒灵..."`
-
-8.  **`grade_relevance_node`**: 将生成的答案与原始问题进行比较，LLM 评估认为答案是相关的。
-    - **状态更新**: `is_relevant = True`
-
-9.  **相关性评估与熔断 (条件边)**: `decide_after_grading` 函数检测到 `is_relevant` 为 `True`，返回 `"continue"`。
-
-10. **`consolidate_memory_node`**: 流程走向终点前的最后一站。它分析整个成功的问答过程，可能会提炼出一条新的记忆，例如：“查询药品‘999感冒灵’的详细信息需要使用网络搜索”，并将其存入长期记忆库。
-
-11. **`END`**: 流程成功结束，最终答案被返回给用户。
+### **第七步: 记忆巩固与结束**
+- **触发**: 外循环决策为 `end`。
+- **动作**: `consolidate_memory_node` 总结本次成功的（或最终失败的）问答，并可能存入长期记忆。
+- **流向**: `END`，流程结束。

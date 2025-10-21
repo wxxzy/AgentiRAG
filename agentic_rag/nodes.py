@@ -7,7 +7,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from agentic_rag.chains import (
     get_query_router_chain, get_initial_rewriter_chain, get_correctional_rewriter_chain, 
-    get_relevance_grader_chain, get_memory_consolidation_chain, llm
+    get_relevance_grader_chain, get_document_relevance_grader_chain, get_memory_consolidation_chain, llm
 )
 from agentic_rag.hierarchical_retriever import hierarchical_retriever, direct_chunk_retriever
 from agentic_rag.retrievers import get_web_search_tool
@@ -62,39 +62,67 @@ def consolidate_memory_node(state: AgentState) -> dict:
 # --- 现有节点改造 ---
 
 def route_query_node(state: AgentState) -> dict:
-    """智能路由节点：现在会利用检索到的记忆来辅助决策。"""
+    """智能路由节点：仅决策，不执行。"""
     print("--- 智能路由与调度 ---")
     query = state["query"]
     memories = state["retrieved_memories"]
     
-    # 1. 调用已升级的、能接收记忆的路由链
     router_chain = get_query_router_chain()
     result = router_chain.invoke({"query": query, "memories": memories})
     route = result['datasource']
     print(f"路由决策: {route}")
 
-    # 2. 根据决策执行操作
-    documents = []
-    if route == 'hierarchical_search':
-        documents = hierarchical_retriever(query)
-    elif route == 'direct_chunk_search':
-        documents = direct_chunk_retriever(query)
-    
-    # 3. 如果本地检索无果，则回退到网络搜索
-    if route in ["hierarchical_search", "direct_chunk_search"] and not documents:
-        print("--- 本地检索无结果，转为网络搜索 ---")
-        route = "web_search"
-    else:
-        print("--- 本地检索到结果，继续流程 ---")
-
     # 记录到对话历史
     history = state.get("conversation_history", [])
     history.append(("Human", query))
 
-    return {"route": route, "documents": documents, "conversation_history": history}
+    # 初始化“已尝试路由”列表
+    return {"route": route, "tried_routes": [route], "conversation_history": history}
+
+def retrieve_documents_node(state: AgentState) -> dict:
+    """文档检索节点：根据路由决策执行检索。"""
+    print(f"--- 文档检索 (策略: {state['route']}) ---")
+    query = state.get("updated_query") or state["query"]
+    route = state["route"]
+    documents = []
+
+    if route == 'hierarchical_search':
+        documents = hierarchical_retriever(query)
+    elif route == 'direct_chunk_search':
+        documents = direct_chunk_retriever(query)
+    elif route == 'web_search':
+        web_search = get_web_search_tool()
+        documents = web_search.invoke({"query": query})
+
+    # 如果本地检索无果，则回退到网络搜索
+    if route in ["hierarchical_search", "direct_chunk_search"] and not documents:
+        print("--- 本地检索无结果，自动转为网络搜索 ---")
+        web_search = get_web_search_tool()
+        documents = web_search.invoke({"query": query})
+        # 更新状态以反映实际使用的路由
+        return {"documents": documents, "route": "web_search"}
+
+    return {"documents": documents}
+
+def grade_documents_node(state: AgentState) -> dict:
+    """文档相关性评估节点（内循环）"""
+    print("--- 评估文档相关性 ---")
+    if not state.get("documents"):
+        print("--- 未检索到文档，评估为不相关 ---")
+        return {"documents_are_relevant": False}
+
+    grader_chain = get_document_relevance_grader_chain()
+    result = grader_chain.invoke({"query": state["query"], "documents": state["documents"]})
+    
+    if result['is_relevant']:
+        print("---" " 文档相关，准备生成答案 ---")
+        return {"documents_are_relevant": True}
+    else:
+        print("--- 文档不相关，将触发重试 ---")
+        return {"documents_are_relevant": False}
 
 def web_search_node(state: AgentState) -> dict:
-    """网络搜索节点"""
+    """网络搜索节点 (现在被 retrieve_documents_node 调用，但保留以备直接调用)"""
     print("--- 网络搜索 ---")
     updated_query = state["updated_query"]
     web_search = get_web_search_tool()
@@ -120,12 +148,14 @@ def rewrite_query_node(state: AgentState) -> dict:
 def generate_response_node(state: AgentState) -> dict:
     """答案生成节点"""
     print("--- 生成答案 ---")
+    # 使用 updated_query (如果存在)，否则使用原始 query
+    query_for_gen = state.get("updated_query") or state["query"]
     prompt = ChatPromptTemplate.from_messages([
         ("system", "你是一个问答机器人。请根据以下上下文信息来回答用户的问题。\n\n上下文:\n{context}"),
         ("human", "问题: {query}")
     ])
     chain = prompt | llm
-    response = chain.invoke({"context": state["documents"], "query": state["updated_query"]})
+    response = chain.invoke({"context": state["documents"], "query": query_for_gen})
     
     # 记录到对话历史
     history = state.get("conversation_history", [])
@@ -145,8 +175,8 @@ def direct_response_node(state: AgentState) -> dict:
     return {"response": response.content, "documents": [], "conversation_history": history}
 
 def grade_relevance_node(state: AgentState) -> dict:
-    """相关性评估节点"""
-    print("--- 评估答案相关性 ---")
+    """答案相关性评估节点（外循环）"""
+    print("--- 评估最终答案相关性 ---")
     grader_chain = get_relevance_grader_chain()
     result = grader_chain.invoke({"query": state["query"], "response": state["response"]})
     if result['is_relevant']:

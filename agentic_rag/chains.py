@@ -69,7 +69,20 @@ class RelevanceGrade(BaseModel):
     """评估答案是否与原始问题相关。"""
     is_relevant: bool = Field(description="布尔值，表示答案是否相关。")
 
+class DocumentRelevanceGrade(BaseModel):
+    """评估一组文档是否与用户问题相关。"""
+    is_relevant: bool = Field(description="布尔值，表示这组文档是否包含足够的信息来回答问题。")
+
 # --- LLM 链定义 ---
+
+def get_document_relevance_grader_chain():
+    """获取文档相关性评估链"""
+    parser = JsonOutputParser(pydantic_object=DocumentRelevanceGrade)
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "你是一位信息相关性评估专家。请根据用户问题，判断下面提供的一组文档是否包含足够的相关信息来回答该问题。只需回答‘True’或‘False’。\n{format_instructions}"),
+        ("human", "用户问题: {query}\n\n检索到的文档:\n{documents}")
+    ]).partial(format_instructions=parser.get_format_instructions())
+    return prompt | llm | parser
 
 def get_query_router_chain():
     """获取查询路由链（已升级为智能路由）"""

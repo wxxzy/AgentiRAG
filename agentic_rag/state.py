@@ -31,3 +31,5 @@ class AgentState(TypedDict):
     retrieved_memories: Optional[List[str]]
     conversation_history: List
     correction_attempts: int
+    tried_routes: List[str]
+    documents_are_relevant: bool
